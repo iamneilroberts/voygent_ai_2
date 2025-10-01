@@ -12,12 +12,8 @@ WORKDIR /app
 # Copy LibreChat configuration
 COPY config/librechat.yaml /app/librechat.yaml
 
-# Ensure LibreChat config is readable
-RUN chmod 644 /app/librechat.yaml
-
 # Create directories for uploads and logs
-RUN mkdir -p /app/client/public/images/uploads /app/logs && \
-    chown -R node:node /app/client/public/images/uploads /app/logs
+RUN mkdir -p /app/client/public/images/uploads /app/logs
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
