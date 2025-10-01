@@ -1,0 +1,146 @@
+# Voygent v2 LibreChat Configuration
+# Production deployment with Cloudflare Workers MCP integration
+
+version: 1.1.0
+cache: true
+
+# REQUIRED: Global MCP server definitions
+mcpServers:
+  d1_database:
+    type: "streamable-http"
+    url: "https://d1-database-prod.somotravel.workers.dev/sse"
+    description: "Trip and hotel data management (Cloudflare D1)"
+    startup: true
+
+  prompt_instructions:
+    type: "streamable-http"
+    url: "https://prompt-instructions-d1-mcp.somotravel.workers.dev/sse"
+    description: "Workflow and conversation management"
+    startup: true
+
+  template_document:
+    type: "streamable-http"
+    url: "https://template-document-mcp.somotravel.workers.dev/sse"
+    description: "Travel document template rendering and publishing"
+    startup: true
+
+endpoints:
+  custom:
+    - name: "Voygent Anthropic"
+      apiKey: "${ANTHROPIC_API_KEY}"
+      baseURL: "https://api.anthropic.com/v1"
+      models:
+        default: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]
+        fetch: false
+      titleConvo: true
+      titleMethod: "completion"
+      titleModel: "claude-3-5-haiku-20241022"
+
+      # MCP Servers integrated with this endpoint
+      mcpServers:
+        d1_database:
+          transport:
+            type: "sse"
+            url: "https://d1-database-prod.somotravel.workers.dev/sse"
+          description: "Trip and hotel data management (Cloudflare D1)"
+          serverInstructions: |
+            Advanced trip planning via Cloudflare Workers with D1 database.
+
+            Database: voygent-prod (Cloudflare D1)
+            Performance: ≤2 DB queries per LLM interaction
+
+            Available tools:
+            - get_anything: Comprehensive search across all trip data
+            - create_trip_with_client: Create trips with client assignment
+            - bulk_trip_operations: Multi-operation transactions
+
+            Always prefer get_anything for broad searches.
+
+        prompt_instructions:
+          transport:
+            type: "sse"
+            url: "https://prompt-instructions-d1-mcp.somotravel.workers.dev/sse"
+          description: "Workflow and conversation management"
+          serverInstructions: |
+            Travel agent workflow coordination and state management.
+
+            Key capabilities:
+            - travel_agent_start: Initialize travel planning workflows
+            - continue_trip: Resume work on existing trips with full context
+            - get_instruction: Retrieve workflow-specific guidance
+
+        template_document:
+          transport:
+            type: "sse"
+            url: "https://template-document-mcp.somotravel.workers.dev/sse"
+          description: "Travel document rendering and publishing"
+          serverInstructions: |
+            Document rendering and publishing workflows.
+
+            - render_template: Generate HTML from trip data
+            - list_templates: Review available formats
+            - publish_travel_document: Push to GitHub Pages
+
+    - name: "Voygent OpenAI"
+      apiKey: "${OPENAI_API_KEY}"
+      baseURL: "https://api.openai.com/v1"
+      models:
+        default: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]
+        fetch: false
+      titleConvo: true
+      titleMethod: "completion"
+      titleModel: "gpt-4o-mini"
+
+      # MCP Servers also available for OpenAI
+      mcpServers:
+        d1_database:
+          transport:
+            type: "sse"
+            url: "https://d1-database-prod.somotravel.workers.dev/sse"
+          description: "Trip and hotel data management"
+
+        prompt_instructions:
+          transport:
+            type: "sse"
+            url: "https://prompt-instructions-d1-mcp.somotravel.workers.dev/sse"
+          description: "Workflow management"
+
+        template_document:
+          transport:
+            type: "sse"
+            url: "https://template-document-mcp.somotravel.workers.dev/sse"
+          description: "Document rendering"
+
+# Interface configuration
+interface:
+  privacyPolicy:
+    externalUrl: "https://voygent.app/privacy"
+  termsOfService:
+    externalUrl: "https://voygent.app/terms"
+
+# File handling
+fileConfig:
+  endpoints:
+    custom:
+      fileLimit: 20
+      fileSizeLimit: 10  # MB
+      totalSizeLimit: 50  # MB
+      supportedMimeTypes:
+        - "image/jpeg"
+        - "image/png"
+        - "image/webp"
+        - "image/gif"
+        - "text/plain"
+        - "application/pdf"
+
+# Registration
+registration:
+  socialLogins: ["discord", "facebook", "github", "google", "openid"]
+
+# Rate limiting
+rateLimits:
+  fileUploads:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60

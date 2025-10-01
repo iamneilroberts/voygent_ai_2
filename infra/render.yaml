@@ -1,0 +1,88 @@
+# Render Blueprint for Voygent v2
+# Deploy LibreChat with MCP integration to Render.com
+
+services:
+  # LibreChat Web Service
+  - type: web
+    name: voygent-librechat
+    runtime: docker
+    dockerfilePath: ./apps/librechat/Dockerfile
+    dockerContext: ./apps/librechat
+    plan: starter  # Adjust based on needs (starter, standard, pro)
+    region: oregon  # Choose closest to users
+
+    envVars:
+      # LibreChat Core Configuration
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 3080
+      - key: NODE_ENV
+        value: production
+      - key: LOG_FORMAT
+        value: json
+
+      # MongoDB Connection (from Render add-on)
+      - key: MONGODB_URI
+        fromDatabase:
+          name: voygent-mongo
+          property: connectionString
+      - key: MONGO_URI
+        fromDatabase:
+          name: voygent-mongo
+          property: connectionString
+
+      # MCP Configuration
+      - key: ALLOW_MCP
+        value: "true"
+      - key: ALLOWED_MCP_ORIGINS
+        value: https://voygent-librechat.onrender.com,https://*.voygent.com,https://app.voygent.com
+
+      # LLM API Keys (set via Render dashboard - DO NOT commit)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # Cloudflare Workers MCP Servers
+      - key: MCP_D1_URL
+        value: https://d1-database-prod.somotravel.workers.dev/sse
+      - key: MCP_PROMPT_URL
+        value: https://prompt-instructions-d1-mcp.somotravel.workers.dev/sse
+      - key: MCP_TEMPLATE_URL
+        value: https://template-document-mcp.somotravel.workers.dev/sse
+
+      # Optional: MCP Authentication (if Workers require auth)
+      - key: MCP_AUTH_KEY
+        sync: false
+
+    healthCheckPath: /api/health
+
+    # Auto-deploy from main branch
+    autoDeploy: true
+
+    # Resources
+    numInstances: 1
+
+    # Build configuration
+    buildCommand: ""  # Docker handles build
+
+    # Persistent disk for uploads (optional)
+    disk:
+      name: voygent-uploads
+      mountPath: /app/client/public/images/uploads
+      sizeGB: 1
+
+# MongoDB Database
+databases:
+  - name: voygent-mongo
+    databaseName: voygent
+    user: voygent
+    plan: starter  # Free tier available, upgrade as needed
+    region: oregon
+    ipAllowList: []  # Empty = allow from all Render services
+
+# Environment Groups (for shared secrets)
+# Create via Render dashboard: Settings > Environment Groups
+# - voygent-secrets: API keys, auth tokens
+# - voygent-mcp-config: MCP server URLs and settings

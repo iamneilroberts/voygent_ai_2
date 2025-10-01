@@ -1,0 +1,29 @@
+# Cloudflare Worker Configuration for d1-database-prod MCP Server
+# This worker provides trip and hotel data management via D1 database
+
+name = "d1-database-prod"
+main = "src/index.js"
+compatibility_date = "2025-01-20"
+
+# D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "voygent-prod"
+database_id = "YOUR_D1_DATABASE_ID"  # Replace with actual voygent-prod database ID
+
+# Environment-specific configuration
+[env.production]
+name = "d1-database-prod"
+vars = { MCP_AUTH_KEY = "your-secret-auth-key" }
+
+# Routes (adjust domain as needed)
+routes = [
+  { pattern = "d1-database-prod.somotravel.workers.dev/*", zone_name = "somotravel.workers.dev" }
+]
+
+# Observability
+[observability]
+enabled = true
+
+# Limits
+limits = { cpu_ms = 50 }

@@ -1,0 +1,25 @@
+[
+  {
+    "id": "LAX-FCO-1750200432843-flight-0",
+    "search_id": "LAX-FCO-1750200432843",
+    "option_number": 0,
+    "outbound_departure": "12/01/2025",
+    "outbound_arrival": "12/02/2025",
+    "outbound_duration": null,
+    "outbound_stops": 1,
+    "outbound_carrier": "DL",
+    "outbound_segments": "[{\"carrierCode\":\"DL\",\"departureDate\":\"12/01/2025\",\"destinationAirport\":\"DTW\",\"flightNumber\":\"402\",\"originAirport\":\"LAX\",\"rowId\":\"flightDetailsRow__0\",\"route\":\"LAX → DTW\"},{\"carrierCode\":\"DL\",\"departureDate\":\"12/02/2025\",\"destinationAirport\":\"FCO\",\"flightNumber\":\"206\",\"originAirport\":\"DTW\",\"rowId\":\"flightDetailsRow__1\",\"route\":\"DTW → FCO\"}]",
+    "return_departure": "12/08/2025",
+    "return_arrival": "12/09/2025",
+    "return_duration": null,
+    "return_stops": 1,
+    "return_carrier": "AF",
+    "return_segments": "[{\"carrierCode\":\"AF\",\"departureDate\":\"12/08/2025\",\"destinationAirport\":\"CDG\",\"flightNumber\":\"1405\",\"originAirport\":\"FCO\",\"rowId\":\"flightDetailsRow__2\",\"route\":\"FCO → CDG\"},{\"carrierCode\":\"DL\",\"departureDate\":\"12/09/2025\",\"destinationAirport\":\"LAX\",\"flightNumber\":\"8766\",\"originAirport\":\"CDG\",\"rowId\":\"flightDetailsRow__3\",\"route\":\"CDG → LAX\"}]",
+    "total_duration": null,
+    "curated_rank": 1,
+    "is_default": "true",
+    "aircraft_types": "[\"narrowbody\",\"widebody\",\"regional\"]",
+    "cabin_classes": "[\"Main Cabin\"]",
+    "extraction_timestamp": "2025-06-17T22:47:13.222Z"
+  }
+]

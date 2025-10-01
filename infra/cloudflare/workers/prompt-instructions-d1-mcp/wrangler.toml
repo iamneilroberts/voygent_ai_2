@@ -1,0 +1,23 @@
+name = "prompt-instructions-d1-mcp"
+main = "src/index.ts"
+compatibility_date = "2024-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+MCP_AUTH_KEY = "prompt-instructions-d1-mcp-auth-key-2025"
+
+[env.production]
+vars = { MCP_AUTH_KEY = "prompt-instructions-d1-mcp-auth-key-2025" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "voygent-prod"
+database_id = "b0eb7ec7-67bc-4b54-b66b-02f4efc22a24"
+
+[[kv_namespaces]]
+binding = "INSTRUCTIONS_CACHE"
+id = "74fe5ac7c4084850a458a4443c029c40"
+preview_id = "72853741dd2646e49e03a390b829e7ce"
+
+[observability.logs]
+enabled = true

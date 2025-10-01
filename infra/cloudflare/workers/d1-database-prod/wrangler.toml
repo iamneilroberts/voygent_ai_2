@@ -1,0 +1,11 @@
+name = "d1-database-prod"
+main = "src/index.js"
+compatibility_date = "2025-01-20"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "voygent-prod"
+database_id = "b0eb7ec7-67bc-4b54-b66b-02f4efc22a24"
+
+[env.production]
+vars = { MCP_AUTH_KEY = "your-secret-auth-key" }
