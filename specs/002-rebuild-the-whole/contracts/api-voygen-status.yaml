@@ -1,0 +1,164 @@
+openapi: 3.0.3
+info:
+  title: Voygent Status API
+  version: 1.0.0
+  description: API endpoint for retrieving current trip planning status and token usage information
+
+paths:
+  /api/voygen/status:
+    get:
+      summary: Get current Voygent status
+      description: Returns either token usage data or trip progress data, depending on what's available. Falls back to 204 No Content if no status data exists.
+      operationId: getVoygenStatus
+      parameters:
+        - name: q
+          in: query
+          description: Optional query parameter for filtering status data
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status data available
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TokenUsageStatus'
+                  - $ref: '#/components/schemas/TripProgressStatus'
+              examples:
+                tokenUsage:
+                  summary: Token usage response
+                  value:
+                    ok: true
+                    model: "claude-3-5-sonnet-20241022"
+                    inputTokens: 1234
+                    outputTokens: 567
+                    approximate: false
+                    price: 0.0089
+                tripProgress:
+                  summary: Trip progress response
+                  value:
+                    ok: true
+                    tripName: "Paris Winter Trip"
+                    dates: "Dec 15-22, 2025"
+                    phase: "Hotels"
+                    step: 2
+                    percent: 35
+                    cost: 1200
+                    budget: 2000
+                    url: "https://example.com/trip/abc123"
+        '204':
+          description: No status data available
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/voygen/start:
+    post:
+      summary: Initialize Voygent backend services
+      description: Triggers initialization of Voygent services (called on app startup)
+      operationId: startVoygenServices
+      responses:
+        '200':
+          description: Services initialized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        '500':
+          description: Initialization failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    TokenUsageStatus:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        model:
+          type: string
+          example: "claude-3-5-sonnet-20241022"
+        inputTokens:
+          type: integer
+          minimum: 0
+          example: 1234
+        outputTokens:
+          type: integer
+          minimum: 0
+          example: 567
+        approximate:
+          type: boolean
+          example: false
+        price:
+          type: number
+          format: float
+          minimum: 0
+          example: 0.0089
+
+    TripProgressStatus:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        tripName:
+          type: string
+          example: "Paris Winter Trip"
+        dates:
+          type: string
+          example: "Dec 15-22, 2025"
+        phase:
+          type: string
+          enum: ["Research", "Hotels", "Activities", "Booking", "Finalization"]
+          example: "Hotels"
+        step:
+          type: integer
+          minimum: 0
+          example: 2
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 35
+        cost:
+          type: number
+          format: float
+          minimum: 0
+          example: 1200
+        budget:
+          type: number
+          format: float
+          minimum: 0
+          example: 2000
+        commission:
+          type: number
+          format: float
+          minimum: 0
+          example: 180
+        url:
+          type: string
+          format: uri
+          example: "https://example.com/trip/abc123"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Internal server error"
+        message:
+          type: string
+          example: "Failed to connect to MCP server"
