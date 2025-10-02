@@ -62,7 +62,34 @@ Module._load = function patchedLoad(request, parent, isMain) {
           });
         });
 
-        console.log('✅ Analytics middleware attached to Express app');
+        // Core instructions endpoint for /voygent feature
+        const fs = require('fs').promises;
+        const path = require('path');
+        app.get('/api/config/core-instructions', async (req, res) => {
+          try {
+            const filePath = path.join(__dirname, '../config/core-instructions.md');
+            const content = await fs.readFile(filePath, 'utf-8');
+            res.set('Content-Type', 'text/markdown; charset=utf-8');
+            res.set('Cache-Control', 'public, max-age=3600');
+            res.send(content);
+          } catch (error) {
+            if (error.code === 'ENOENT') {
+              return res.status(404).json({
+                error: 'Core instructions file not found',
+                code: 'CONFIG_NOT_FOUND',
+                message: 'The core-instructions.md configuration file is missing'
+              });
+            }
+            console.error('Error serving core instructions:', error);
+            res.status(500).json({
+              error: 'Internal server error',
+              code: 'READ_ERROR',
+              message: 'Failed to read core instructions file'
+            });
+          }
+        });
+
+        console.log('✅ Analytics middleware and core instructions endpoint attached to Express app');
       } catch (err) {
         console.error('⚠️  Failed to attach analytics middleware:', err?.message || err);
       }

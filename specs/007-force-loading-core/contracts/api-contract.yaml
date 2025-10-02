@@ -1,0 +1,393 @@
+openapi: 3.0.3
+info:
+  title: Core Instructions Loading API
+  description: API contracts for loading Voygent core instructions in LibreChat
+  version: 1.0.0
+  contact:
+    name: Voygent Development Team
+
+servers:
+  - url: http://localhost:3080
+    description: Local development
+  - url: https://voygent.somotravel.com
+    description: Production
+
+paths:
+  /api/config/core-instructions:
+    get:
+      summary: Get core instructions content
+      description: |
+        Retrieves the Voygent-specific core instructions (system prompts and context)
+        for configuring AI assistant behavior. This endpoint serves a static
+        configuration file that can be cached by the client.
+      operationId: getCoreInstructions
+      tags:
+        - Configuration
+      responses:
+        '200':
+          description: Core instructions retrieved successfully
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                example: text/markdown; charset=utf-8
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=3600
+              description: Cache for 1 hour (instructions change infrequently)
+            Content-Length:
+              schema:
+                type: integer
+                example: 3456
+              description: Size in bytes (typically 2000-4000)
+          content:
+            text/markdown:
+              schema:
+                type: string
+                minLength: 100
+                maxLength: 10240
+                example: |
+                  # Voygent Travel Planning Assistant - Core Instructions
+
+                  ## Role & Context
+                  You are Voygent, an AI travel planning assistant...
+
+                  ## Available MCP Tools
+                  - d1_database: Trip and hotel data management
+                  - prompt_instructions: Workflow coordination
+                  - template_document: Document rendering
+
+                  ## Workflow Guidance
+                  [Standard operating procedures...]
+        '404':
+          description: Core instructions file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Core instructions file not found"
+                code: "CONFIG_NOT_FOUND"
+                message: "The core-instructions.md configuration file is missing"
+        '500':
+          description: Server error retrieving instructions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Internal server error"
+                code: "READ_ERROR"
+                message: "Failed to read core instructions file"
+
+components:
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+        - code
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Detailed error explanation
+
+---
+
+# Client-Side API Contract (TypeScript Interfaces)
+
+## Core Instructions Service Interface
+
+```typescript
+/**
+ * Service for loading and managing core instructions
+ */
+interface CoreInstructionsService {
+  /**
+   * Load core instructions from network or cache
+   * @param options Loading options
+   * @returns Promise resolving to instructions content
+   * @throws CoreInstructionsError on failure
+   */
+  loadInstructions(options?: LoadOptions): Promise<InstructionsResult>;
+
+  /**
+   * Get current instructions from memory (synchronous)
+   * @returns Current instructions or null if not loaded
+   */
+  getCurrentInstructions(): string | null;
+
+  /**
+   * Clear cached instructions from localStorage
+   */
+  clearCache(): void;
+
+  /**
+   * Get current load status
+   */
+  getStatus(): InstructionsLoadState;
+}
+
+interface LoadOptions {
+  /** Force refresh from network, bypass cache */
+  forceRefresh?: boolean;
+
+  /** Timeout in milliseconds (default: 5000) */
+  timeout?: number;
+
+  /** Show toast notifications (default: true) */
+  showToast?: boolean;
+}
+
+interface InstructionsResult {
+  /** The loaded instructions content */
+  content: string;
+
+  /** Source of the loaded instructions */
+  source: 'cache' | 'network';
+
+  /** Timestamp when loaded */
+  loadedAt: number;
+
+  /** Optional version identifier */
+  version?: string;
+}
+
+interface InstructionsLoadState {
+  /** Current loading status */
+  status: 'idle' | 'loading' | 'loaded' | 'error';
+
+  /** Loaded instructions content (null if not loaded) */
+  content: string | null;
+
+  /** Error message if status is 'error' */
+  errorMessage: string | null;
+
+  /** Timestamp of last successful load */
+  lastLoadTime: number | null;
+
+  /** Source of current instructions */
+  source: 'localStorage' | 'network' | 'none';
+}
+
+class CoreInstructionsError extends Error {
+  constructor(
+    message: string,
+    public code: ErrorCode,
+    public originalError?: Error
+  ) {
+    super(message);
+    this.name = 'CoreInstructionsError';
+  }
+}
+
+type ErrorCode =
+  | 'FETCH_FAILED'
+  | 'PARSE_ERROR'
+  | 'STORAGE_QUOTA_EXCEEDED'
+  | 'INVALID_CONTENT'
+  | 'TIMEOUT'
+  | 'NETWORK_ERROR';
+```
+
+## React Hook Interface
+
+```typescript
+/**
+ * React hook for managing core instructions in components
+ */
+function useCoreInstructions(): {
+  /** Current load state */
+  state: InstructionsLoadState;
+
+  /** Load or reload instructions */
+  load: (options?: LoadOptions) => Promise<void>;
+
+  /** Reload instructions (alias for load with forceRefresh) */
+  reload: () => Promise<void>;
+
+  /** Clear cache */
+  clearCache: () => void;
+
+  /** Whether instructions are currently loaded */
+  isLoaded: boolean;
+
+  /** Whether currently loading */
+  isLoading: boolean;
+
+  /** Whether in error state */
+  hasError: boolean;
+}
+```
+
+## Slash Command Contract
+
+```typescript
+/**
+ * Slash command registration for /voygent
+ */
+interface SlashCommand {
+  /** Command name (without /) */
+  name: 'voygent';
+
+  /** Command description shown in help */
+  description: 'Reload Voygent core instructions';
+
+  /** Command handler function */
+  handler: CommandHandler;
+
+  /** Whether command is available (always true) */
+  enabled: true;
+}
+
+type CommandHandler = (
+  args: string[],
+  context: CommandContext
+) => Promise<CommandResult>;
+
+interface CommandContext {
+  /** Current conversation/chat context */
+  conversationId?: string;
+
+  /** Toast notification service */
+  toast: ToastService;
+
+  /** Core instructions service */
+  instructionsService: CoreInstructionsService;
+}
+
+interface CommandResult {
+  /** Whether command executed successfully */
+  success: boolean;
+
+  /** Optional message to display */
+  message?: string;
+
+  /** Whether to prevent default message sending */
+  preventDefault: boolean;
+}
+```
+
+## localStorage Contract
+
+```typescript
+/**
+ * localStorage schema for cached instructions
+ */
+interface StoredInstructions {
+  /** The instruction content */
+  content: string;
+
+  /** Timestamp when cached (Unix milliseconds) */
+  cachedAt: number;
+
+  /** Source of cached data (always 'network') */
+  source: 'network';
+
+  /** Optional version identifier */
+  version?: string;
+}
+
+/**
+ * localStorage key constant
+ */
+const STORAGE_KEY = 'voygent-core-instructions' as const;
+
+/**
+ * Storage operations
+ */
+interface StorageAdapter {
+  get(key: typeof STORAGE_KEY): StoredInstructions | null;
+  set(key: typeof STORAGE_KEY, value: StoredInstructions): void;
+  remove(key: typeof STORAGE_KEY): void;
+  has(key: typeof STORAGE_KEY): boolean;
+}
+```
+
+## Toast Notification Contract
+
+```typescript
+/**
+ * Toast notifications for instruction loading feedback
+ */
+interface InstructionToasts {
+  /** Show loading toast (returns toast ID for updates) */
+  showLoading(): string;
+
+  /** Update loading toast to success */
+  showSuccess(toastId?: string): void;
+
+  /** Show error toast with retry option */
+  showError(error: CoreInstructionsError, toastId?: string): void;
+}
+
+/**
+ * Toast message templates
+ */
+const TOAST_MESSAGES = {
+  loading: 'Loading Voygent instructions...',
+  success: '✓ Voygent instructions loaded successfully',
+  error: (message: string) => `⚠ Failed to load instructions: ${message}`,
+  errorWithRetry: '⚠ Failed to load instructions. Type /voygent to retry',
+} as const;
+```
+
+---
+
+# Contract Tests Requirements
+
+## API Endpoint Tests
+- [ ] GET /api/config/core-instructions returns 200 with valid Markdown
+- [ ] Response Content-Type is text/markdown
+- [ ] Response size is between 100 and 10240 bytes
+- [ ] Response includes Cache-Control header
+- [ ] 404 returned when file missing
+- [ ] 500 returned on server read error
+
+## Service Contract Tests
+- [ ] loadInstructions() with no cache fetches from network
+- [ ] loadInstructions() with valid cache returns from cache
+- [ ] loadInstructions({ forceRefresh: true }) bypasses cache
+- [ ] getCurrentInstructions() returns content when loaded
+- [ ] getCurrentInstructions() returns null when not loaded
+- [ ] clearCache() removes localStorage entry
+- [ ] getStatus() reflects current state accurately
+
+## Hook Contract Tests
+- [ ] useCoreInstructions() initializes with idle state
+- [ ] load() updates state to loading → loaded
+- [ ] load() handles errors and updates state to error
+- [ ] reload() forces network refresh
+- [ ] isLoaded true when state.status === 'loaded'
+- [ ] isLoading true when state.status === 'loading'
+- [ ] hasError true when state.status === 'error'
+
+## Slash Command Tests
+- [ ] /voygent command registered in command registry
+- [ ] /voygent triggers reload with forceRefresh
+- [ ] /voygent shows loading toast
+- [ ] /voygent shows success toast on success
+- [ ] /voygent shows error toast on failure
+- [ ] /voygent prevents message submission (preventDefault: true)
+
+## localStorage Tests
+- [ ] StorageAdapter.set() writes valid JSON
+- [ ] StorageAdapter.get() parses stored data
+- [ ] StorageAdapter.get() returns null for missing key
+- [ ] StorageAdapter.get() handles corrupted JSON gracefully
+- [ ] StorageAdapter.remove() clears storage entry
+
+## Error Handling Tests
+- [ ] Network timeout throws TIMEOUT error
+- [ ] Fetch failure throws NETWORK_ERROR
+- [ ] Invalid content throws INVALID_CONTENT
+- [ ] Storage quota exceeded throws STORAGE_QUOTA_EXCEEDED
+- [ ] All errors include message and code
+- [ ] All errors are caught and don't crash app
