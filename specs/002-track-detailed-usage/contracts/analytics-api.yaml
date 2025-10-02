@@ -1,0 +1,1131 @@
+openapi: 3.0.3
+info:
+  title: Voygent Usage Analytics API
+  description: |
+    Query API for usage analytics and cost monitoring dashboard.
+
+    Provides read-only access to session data, interaction history, and cost aggregations.
+    All timestamps use ISO 8601 format (UTC). Costs are returned in both micro-cents (exact)
+    and display format (USD dollars with 4 decimal places).
+
+    **Research Context**:
+    - Data model uses active/archive table split (90-day cutoff)
+    - Costs stored as INTEGER micro-cents for exact arithmetic (Decision #4)
+    - Unified views (`*_all`) transparently query both active and archived data
+    - Expected scale: 100 sessions/day, ~36.5K rows/year
+  version: 1.0.0
+  contact:
+    name: Voygent API Support
+    url: https://github.com/voygent/voygent-v2
+  license:
+    name: MIT
+
+servers:
+  - url: https://analytics.voygent.workers.dev/v1
+    description: Production (Cloudflare Workers)
+  - url: http://localhost:8787/v1
+    description: Local development (wrangler dev)
+
+tags:
+  - name: Sessions
+    description: Query user sessions and conversation threads
+  - name: Interactions
+    description: Query individual user interactions
+  - name: Statistics
+    description: Aggregated cost and usage statistics
+  - name: Health
+    description: API health and status
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ============================================================================
+  # SESSIONS
+  # ============================================================================
+
+  /sessions:
+    get:
+      summary: List sessions
+      description: |
+        Retrieve paginated list of user sessions with filtering and sorting.
+
+        **Performance**: Uses `idx_sessions_active_start_time` index (5-10ms p95).
+
+        **Data Source**: Queries `sessions_all` view (active + archive tables).
+      operationId: listSessions
+      tags:
+        - Sessions
+      parameters:
+        - name: user_id
+          in: query
+          description: Filter by LibreChat user ID
+          schema:
+            type: string
+            format: uuid
+          example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+        - name: start_time_min
+          in: query
+          description: Filter sessions starting on or after this timestamp (ISO 8601 UTC)
+          schema:
+            type: string
+            format: date-time
+          example: "2025-09-01T00:00:00Z"
+
+        - name: start_time_max
+          in: query
+          description: Filter sessions starting before this timestamp (ISO 8601 UTC)
+          schema:
+            type: string
+            format: date-time
+          example: "2025-10-02T23:59:59Z"
+
+        - name: active_only
+          in: query
+          description: If true, only return sessions without end_time (still active)
+          schema:
+            type: boolean
+            default: false
+          example: true
+
+        - name: limit
+          in: query
+          description: Maximum number of sessions to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          example: 20
+
+        - name: offset
+          in: query
+          description: Number of sessions to skip (for pagination)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+
+        - name: sort
+          in: query
+          description: Sort field and direction
+          schema:
+            type: string
+            enum:
+              - start_time_desc
+              - start_time_asc
+              - total_cost_desc
+              - total_cost_asc
+            default: start_time_desc
+          example: "total_cost_desc"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - pagination
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionSummary'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+              example:
+                data:
+                  - id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                    user_id: "user-123"
+                    start_time: "2025-10-02T14:30:00Z"
+                    end_time: "2025-10-02T15:45:00Z"
+                    duration_minutes: 75
+                    total_interactions: 23
+                    total_cost:
+                      micro_cents: 12450
+                      display: "$0.1245"
+                      currency: "USD"
+                    data_source: "active"
+                pagination:
+                  total: 127
+                  limit: 50
+                  offset: 0
+                  has_more: true
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}:
+    get:
+      summary: Get session details
+      description: |
+        Retrieve detailed information about a specific session.
+
+        **Performance**: Single index lookup on session ID (2-5ms).
+      operationId: getSession
+      tags:
+        - Sessions
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          description: Session ID (LibreChat conversationId)
+          schema:
+            type: string
+            format: uuid
+          example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetail'
+              example:
+                id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                user_id: "user-123"
+                start_time: "2025-10-02T14:30:00Z"
+                end_time: "2025-10-02T15:45:00Z"
+                duration_minutes: 75
+                total_interactions: 23
+                total_cost:
+                  micro_cents: 12450
+                  display: "$0.1245"
+                  currency: "USD"
+                metadata:
+                  ip_address: "192.0.2.1"
+                  user_agent: "Mozilla/5.0..."
+                  endpoint: "openAI"
+                  preset_id: "travel-assistant"
+                data_source: "active"
+                created_at: "2025-10-02T14:30:00Z"
+                updated_at: "2025-10-02T15:45:00Z"
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sessions/{session_id}/interactions:
+    get:
+      summary: List interactions in session
+      description: |
+        Retrieve all interactions within a specific session, ordered chronologically.
+
+        **Performance**: Uses `idx_interactions_active_session` covering index (5-15ms).
+
+        **Typical Size**: 10-100 interactions per session.
+      operationId: getSessionInteractions
+      tags:
+        - Sessions
+        - Interactions
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          description: Session ID
+          schema:
+            type: string
+            format: uuid
+          example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+        - name: type
+          in: query
+          description: Filter by interaction type
+          schema:
+            type: string
+            enum:
+              - chat
+              - db
+              - api
+              - cost-event
+          example: "chat"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - session_id
+                  - interactions
+                properties:
+                  session_id:
+                    type: string
+                    format: uuid
+                  interactions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Interaction'
+              example:
+                session_id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                interactions:
+                  - id: "int-001"
+                    timestamp: "2025-10-02T14:31:23Z"
+                    type: "chat"
+                    status: "completed"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    prompt_tokens: 450
+                    completion_tokens: 320
+                    token_count: 770
+                    duration_ms: 2340
+                    total_cost:
+                      micro_cents: 9600
+                      display: "$0.0960"
+                      currency: "USD"
+                    cost_breakdown:
+                      ai_tokens:
+                        micro_cents: 9600
+                        display: "$0.0960"
+                      db_ops:
+                        micro_cents: 0
+                        display: "$0.0000"
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # INTERACTIONS
+  # ============================================================================
+
+  /interactions:
+    get:
+      summary: List interactions
+      description: |
+        Retrieve paginated list of interactions across all sessions.
+
+        **Performance**: Uses `idx_interactions_active_timestamp` for time-range queries (10-20ms).
+
+        **Use Case**: System-wide interaction logs, debugging, audit trails.
+      operationId: listInteractions
+      tags:
+        - Interactions
+      parameters:
+        - name: user_id
+          in: query
+          description: Filter by user ID
+          schema:
+            type: string
+          example: "user-123"
+
+        - name: type
+          in: query
+          description: Filter by interaction type
+          schema:
+            type: string
+            enum:
+              - chat
+              - db
+              - api
+              - cost-event
+          example: "chat"
+
+        - name: timestamp_min
+          in: query
+          description: Filter interactions on or after this timestamp (ISO 8601 UTC)
+          schema:
+            type: string
+            format: date-time
+          example: "2025-10-01T00:00:00Z"
+
+        - name: timestamp_max
+          in: query
+          description: Filter interactions before this timestamp (ISO 8601 UTC)
+          schema:
+            type: string
+            format: date-time
+          example: "2025-10-02T23:59:59Z"
+
+        - name: status
+          in: query
+          description: Filter by interaction status
+          schema:
+            type: string
+            enum:
+              - completed
+              - failed
+              - timeout
+          example: "failed"
+
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          example: 25
+
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - pagination
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Interaction'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /interactions/{interaction_id}:
+    get:
+      summary: Get interaction details
+      description: Retrieve detailed information about a specific interaction
+      operationId: getInteraction
+      tags:
+        - Interactions
+      parameters:
+        - name: interaction_id
+          in: path
+          required: true
+          description: Interaction ID
+          schema:
+            type: string
+          example: "int-001"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InteractionDetail'
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # STATISTICS
+  # ============================================================================
+
+  /stats/daily:
+    get:
+      summary: Get daily cost statistics
+      description: |
+        Aggregate cost and usage statistics grouped by day.
+
+        **Performance**: Uses `idx_interactions_active_cost_analytics` covering index (15-30ms).
+
+        **Dashboard Use**: Time-series charts for cost trends.
+      operationId: getDailyStats
+      tags:
+        - Statistics
+      parameters:
+        - name: start_date
+          in: query
+          required: true
+          description: Start date (inclusive, YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+          example: "2025-09-01"
+
+        - name: end_date
+          in: query
+          required: true
+          description: End date (inclusive, YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+          example: "2025-10-02"
+
+        - name: user_id
+          in: query
+          description: Optional user filter
+          schema:
+            type: string
+          example: "user-123"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - start_date
+                  - end_date
+                  - daily_stats
+                properties:
+                  start_date:
+                    type: string
+                    format: date
+                  end_date:
+                    type: string
+                    format: date
+                  daily_stats:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DailyStat'
+              example:
+                start_date: "2025-09-01"
+                end_date: "2025-10-02"
+                daily_stats:
+                  - date: "2025-10-01"
+                    sessions_count: 12
+                    interactions_count: 156
+                    total_cost:
+                      micro_cents: 123450
+                      display: "$1.2345"
+                      currency: "USD"
+                    cost_breakdown:
+                      ai_tokens:
+                        micro_cents: 110000
+                        display: "$1.1000"
+                      db_ops:
+                        micro_cents: 13450
+                        display: "$0.1345"
+                  - date: "2025-10-02"
+                    sessions_count: 8
+                    interactions_count: 98
+                    total_cost:
+                      micro_cents: 87600
+                      display: "$0.8760"
+                      currency: "USD"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /stats/summary:
+    get:
+      summary: Get aggregate summary statistics
+      description: |
+        High-level summary of usage and costs across all users or filtered scope.
+
+        **Dashboard Use**: Top-of-dashboard KPI cards.
+      operationId: getSummaryStats
+      tags:
+        - Statistics
+      parameters:
+        - name: start_date
+          in: query
+          description: Start date for aggregation (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+          example: "2025-09-01"
+
+        - name: end_date
+          in: query
+          description: End date for aggregation (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+          example: "2025-10-02"
+
+        - name: user_id
+          in: query
+          description: Optional user filter
+          schema:
+            type: string
+          example: "user-123"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryStats'
+              example:
+                total_sessions: 127
+                total_interactions: 2847
+                unique_users: 23
+                total_cost:
+                  micro_cents: 2134500
+                  display: "$21.3450"
+                  currency: "USD"
+                cost_breakdown:
+                  ai_tokens:
+                    micro_cents: 1900000
+                    display: "$19.0000"
+                  db_ops:
+                    micro_cents: 234500
+                    display: "$2.3450"
+                  api_calls:
+                    micro_cents: 0
+                    display: "$0.0000"
+                  compute_time:
+                    micro_cents: 0
+                    display: "$0.0000"
+                avg_cost_per_session:
+                  micro_cents: 16807
+                  display: "$0.1681"
+                  currency: "USD"
+                avg_interactions_per_session: 22.4
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /stats/by-user:
+    get:
+      summary: Get per-user statistics
+      description: |
+        Aggregate statistics grouped by user, sorted by total cost.
+
+        **Dashboard Use**: User leaderboard, cost allocation.
+      operationId: getUserStats
+      tags:
+        - Statistics
+      parameters:
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2025-09-01"
+
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2025-10-02"
+
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 10
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - users
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserStat'
+              example:
+                users:
+                  - user_id: "user-123"
+                    sessions_count: 45
+                    interactions_count: 892
+                    total_cost:
+                      micro_cents: 987650
+                      display: "$9.8765"
+                      currency: "USD"
+                  - user_id: "user-456"
+                    sessions_count: 23
+                    interactions_count: 456
+                    total_cost:
+                      micro_cents: 543210
+                      display: "$5.4321"
+                      currency: "USD"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # HEALTH
+  # ============================================================================
+
+  /health:
+    get:
+      summary: Health check
+      description: API and database health status
+      operationId: getHealth
+      tags:
+        - Health
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - timestamp
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - healthy
+                      - degraded
+                      - unhealthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  database:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - connected
+                          - disconnected
+                      latency_ms:
+                        type: integer
+              example:
+                status: "healthy"
+                timestamp: "2025-10-02T15:30:00Z"
+                database:
+                  status: "connected"
+                  latency_ms: 3
+
+# ==============================================================================
+# COMPONENTS
+# ==============================================================================
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        LibreChat JWT token extracted from Authorization header.
+        Required for all endpoints except /health.
+
+  schemas:
+    # ====== COST ======
+    CostValue:
+      type: object
+      description: |
+        Cost representation with both exact (micro-cents) and display (USD) formats.
+
+        **Research Decision #4**: INTEGER micro-cents for exact arithmetic.
+      required:
+        - micro_cents
+        - display
+        - currency
+      properties:
+        micro_cents:
+          type: integer
+          description: Exact cost in micro-cents (1 micro-cent = $0.00001)
+          example: 12450
+        display:
+          type: string
+          description: Human-readable cost formatted as USD with 4 decimal places
+          pattern: '^\$\d+\.\d{4}$'
+          example: "$0.1245"
+        currency:
+          type: string
+          description: Currency code (ISO 4217)
+          enum:
+            - USD
+          example: "USD"
+
+    CostBreakdown:
+      type: object
+      description: Cost breakdown by factor type
+      required:
+        - ai_tokens
+        - db_ops
+        - api_calls
+        - compute_time
+      properties:
+        ai_tokens:
+          $ref: '#/components/schemas/CostValue'
+        db_ops:
+          $ref: '#/components/schemas/CostValue'
+        api_calls:
+          $ref: '#/components/schemas/CostValue'
+        compute_time:
+          $ref: '#/components/schemas/CostValue'
+
+    # ====== SESSIONS ======
+    SessionSummary:
+      type: object
+      description: Session list item (summary view)
+      required:
+        - id
+        - user_id
+        - start_time
+        - total_interactions
+        - total_cost
+        - data_source
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Session ID (LibreChat conversationId)
+        user_id:
+          type: string
+          description: User identifier (LibreChat user.id)
+        start_time:
+          type: string
+          format: date-time
+          description: Session start timestamp (ISO 8601 UTC)
+        end_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: Session end timestamp (null if still active)
+        duration_minutes:
+          type: integer
+          nullable: true
+          description: Duration in minutes (null if still active)
+        total_interactions:
+          type: integer
+          description: Number of interactions in this session
+        total_cost:
+          $ref: '#/components/schemas/CostValue'
+        data_source:
+          type: string
+          enum:
+            - active
+            - archive
+          description: Data source table (active = last 90 days, archive = older)
+
+    SessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/SessionSummary'
+        - type: object
+          required:
+            - metadata
+            - created_at
+            - updated_at
+          properties:
+            metadata:
+              type: object
+              description: Session metadata (JSON)
+              additionalProperties: true
+              example:
+                ip_address: "192.0.2.1"
+                user_agent: "Mozilla/5.0..."
+                endpoint: "openAI"
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            archived_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    # ====== INTERACTIONS ======
+    Interaction:
+      type: object
+      description: Interaction summary
+      required:
+        - id
+        - session_id
+        - timestamp
+        - type
+        - status
+        - total_cost
+      properties:
+        id:
+          type: string
+          description: Interaction ID (UUID v7)
+        session_id:
+          type: string
+          format: uuid
+          description: Parent session ID
+        timestamp:
+          type: string
+          format: date-time
+          description: Interaction timestamp (ISO 8601 UTC)
+        type:
+          type: string
+          enum:
+            - chat
+            - db
+            - api
+            - cost-event
+          description: Interaction type
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+            - timeout
+          description: Interaction status
+        model_name:
+          type: string
+          nullable: true
+          description: AI model name (null for non-chat interactions)
+          example: "gpt-4-turbo-2024-04-09"
+        prompt_tokens:
+          type: integer
+          nullable: true
+          description: Number of prompt tokens (chat only)
+        completion_tokens:
+          type: integer
+          nullable: true
+          description: Number of completion tokens (chat only)
+        token_count:
+          type: integer
+          nullable: true
+          description: Total tokens (prompt + completion)
+        duration_ms:
+          type: integer
+          nullable: true
+          description: Duration in milliseconds
+        total_cost:
+          $ref: '#/components/schemas/CostValue'
+        cost_breakdown:
+          $ref: '#/components/schemas/CostBreakdown'
+
+    InteractionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Interaction'
+        - type: object
+          required:
+            - user_id
+            - metadata
+            - created_at
+          properties:
+            user_id:
+              type: string
+              description: User identifier
+            metadata:
+              type: object
+              description: Interaction metadata (JSON)
+              additionalProperties: true
+              example:
+                request_id: "msg-abc123"
+                tool_name: "d1_query"
+                cache_hit: false
+            created_at:
+              type: string
+              format: date-time
+            data_source:
+              type: string
+              enum:
+                - active
+                - archive
+
+    # ====== STATISTICS ======
+    DailyStat:
+      type: object
+      description: Daily aggregated statistics
+      required:
+        - date
+        - sessions_count
+        - interactions_count
+        - total_cost
+      properties:
+        date:
+          type: string
+          format: date
+          description: Date (YYYY-MM-DD)
+        sessions_count:
+          type: integer
+          description: Number of sessions on this date
+        interactions_count:
+          type: integer
+          description: Number of interactions on this date
+        total_cost:
+          $ref: '#/components/schemas/CostValue'
+        cost_breakdown:
+          $ref: '#/components/schemas/CostBreakdown'
+
+    UserStat:
+      type: object
+      description: Per-user aggregated statistics
+      required:
+        - user_id
+        - sessions_count
+        - interactions_count
+        - total_cost
+      properties:
+        user_id:
+          type: string
+          description: User identifier
+        sessions_count:
+          type: integer
+        interactions_count:
+          type: integer
+        total_cost:
+          $ref: '#/components/schemas/CostValue'
+
+    SummaryStats:
+      type: object
+      description: High-level summary statistics
+      required:
+        - total_sessions
+        - total_interactions
+        - unique_users
+        - total_cost
+      properties:
+        total_sessions:
+          type: integer
+        total_interactions:
+          type: integer
+        unique_users:
+          type: integer
+        total_cost:
+          $ref: '#/components/schemas/CostValue'
+        cost_breakdown:
+          $ref: '#/components/schemas/CostBreakdown'
+        avg_cost_per_session:
+          $ref: '#/components/schemas/CostValue'
+        avg_interactions_per_session:
+          type: number
+          format: float
+
+    # ====== PAGINATION ======
+    Pagination:
+      type: object
+      description: Pagination metadata
+      required:
+        - total
+        - limit
+        - offset
+        - has_more
+      properties:
+        total:
+          type: integer
+          description: Total number of items matching filters
+        limit:
+          type: integer
+          description: Maximum items returned in this response
+        offset:
+          type: integer
+          description: Number of items skipped
+        has_more:
+          type: boolean
+          description: Whether more items exist beyond this page
+
+    # ====== ERRORS ======
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Invalid date range: start_date must be before end_date"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "invalid_request"
+            message: "Invalid date range: start_date must be before end_date"
+            details:
+              field: "start_date"
+              value: "2025-10-02"
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "unauthorized"
+            message: "Missing or invalid JWT token"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "not_found"
+            message: "Session not found: a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "internal_error"
+            message: "Database query failed"
+            details:
+              request_id: "req-xyz789"

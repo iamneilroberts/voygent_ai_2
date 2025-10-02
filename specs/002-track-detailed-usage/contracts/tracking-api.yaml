@@ -1,0 +1,650 @@
+openapi: 3.0.3
+info:
+  title: Voygent Usage Tracking API
+  description: |
+    Ingestion API for recording user sessions, interactions, and cost events.
+
+    This API is called by LibreChat middleware and MCP server wrappers to record
+    real-time usage data. All writes are asynchronous (fire-and-forget from caller's
+    perspective) to avoid blocking user interactions.
+
+    **Research Context**:
+    - Session IDs = LibreChat conversationId (Decision #5)
+    - User IDs extracted from JWT tokens
+    - Costs stored as INTEGER micro-cents (Decision #4)
+    - Active/archive split handled transparently by database triggers
+  version: 1.0.0
+  contact:
+    name: Voygent API Support
+    url: https://github.com/voygent/voygent-v2
+  license:
+    name: MIT
+
+servers:
+  - url: https://tracking.voygent.workers.dev/v1
+    description: Production (Cloudflare Workers)
+  - url: http://localhost:8788/v1
+    description: Local development (wrangler dev)
+
+tags:
+  - name: Sessions
+    description: Session lifecycle tracking
+  - name: Interactions
+    description: Interaction event tracking
+  - name: Health
+    description: API health and status
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ============================================================================
+  # SESSIONS
+  # ============================================================================
+
+  /track/session/start:
+    post:
+      summary: Start a new session
+      description: |
+        Record the start of a new user session (conversation thread).
+
+        **Caller**: LibreChat middleware on first message in conversation.
+
+        **Idempotency**: If session ID already exists, returns 200 (no-op).
+
+        **Performance**: Single INSERT into `sessions_active` (2-5ms).
+      operationId: startSession
+      tags:
+        - Sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - user_id
+                - start_time
+              properties:
+                session_id:
+                  type: string
+                  format: uuid
+                  description: LibreChat conversationId
+                  example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                user_id:
+                  type: string
+                  description: LibreChat user.id from JWT
+                  example: "user-123"
+                start_time:
+                  type: string
+                  format: date-time
+                  description: Session start timestamp (ISO 8601 UTC)
+                  example: "2025-10-02T14:30:00Z"
+                metadata:
+                  type: object
+                  description: Optional session metadata
+                  additionalProperties: true
+                  example:
+                    ip_address: "192.0.2.1"
+                    user_agent: "Mozilla/5.0..."
+                    endpoint: "openAI"
+                    preset_id: "travel-assistant"
+
+      responses:
+        '201':
+          description: Session started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - session_id
+                  - status
+                properties:
+                  session_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum:
+                      - created
+                      - already_exists
+                  message:
+                    type: string
+              example:
+                session_id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                status: "created"
+                message: "Session started successfully"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /track/session/end:
+    post:
+      summary: End an active session
+      description: |
+        Mark a session as ended and finalize cost rollups.
+
+        **Caller**: LibreChat on conversation close, or scheduled job on inactivity timeout.
+
+        **Behavior**:
+        - Sets `end_time` on session
+        - Recalculates `total_cost_mc` and `total_interactions` from child interactions
+        - Idempotent (can be called multiple times)
+
+        **Performance**: Single UPDATE + aggregation query (10-20ms).
+      operationId: endSession
+      tags:
+        - Sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - end_time
+              properties:
+                session_id:
+                  type: string
+                  format: uuid
+                  description: Session ID to end
+                  example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                end_time:
+                  type: string
+                  format: date-time
+                  description: Session end timestamp (ISO 8601 UTC)
+                  example: "2025-10-02T15:45:00Z"
+
+      responses:
+        '200':
+          description: Session ended successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - session_id
+                  - total_interactions
+                  - total_cost
+                properties:
+                  session_id:
+                    type: string
+                    format: uuid
+                  total_interactions:
+                    type: integer
+                    description: Final interaction count
+                  total_cost:
+                    $ref: '#/components/schemas/CostValue'
+              example:
+                session_id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+                total_interactions: 23
+                total_cost:
+                  micro_cents: 12450
+                  display: "$0.1245"
+                  currency: "USD"
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # INTERACTIONS
+  # ============================================================================
+
+  /track/interaction:
+    post:
+      summary: Record a user interaction
+      description: |
+        Record a single user interaction (chat message, DB operation, API call, etc.).
+
+        **Callers**:
+        - LibreChat middleware: chat interactions
+        - MCP server wrappers: DB/API interactions
+        - Cost reconciliation jobs: cost-event interactions
+
+        **Cost Calculation**: Caller is responsible for calculating costs using pricing cache.
+
+        **Performance**: Single INSERT into `interactions_active` + session rollup update (5-10ms).
+
+        **Async Processing**: Returns 202 immediately; database write happens asynchronously.
+      operationId: trackInteraction
+      tags:
+        - Interactions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InteractionEvent'
+
+      responses:
+        '202':
+          description: Interaction accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - interaction_id
+                  - status
+                properties:
+                  interaction_id:
+                    type: string
+                    description: Generated interaction ID
+                  status:
+                    type: string
+                    enum:
+                      - accepted
+                  message:
+                    type: string
+              example:
+                interaction_id: "int-abc123xyz"
+                status: "accepted"
+                message: "Interaction queued for processing"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /track/interaction/batch:
+    post:
+      summary: Record multiple interactions in batch
+      description: |
+        Batch insert for multiple interactions. More efficient than individual calls.
+
+        **Use Case**: Reconciliation jobs, replaying events from logs.
+
+        **Limit**: Maximum 100 interactions per batch.
+
+        **Atomicity**: All interactions inserted in single transaction (all succeed or all fail).
+      operationId: trackInteractionBatch
+      tags:
+        - Interactions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - interactions
+              properties:
+                interactions:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    $ref: '#/components/schemas/InteractionEvent'
+
+      responses:
+        '202':
+          description: Batch accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - count
+                  - status
+                properties:
+                  count:
+                    type: integer
+                    description: Number of interactions accepted
+                  status:
+                    type: string
+                    enum:
+                      - accepted
+                  message:
+                    type: string
+              example:
+                count: 42
+                status: "accepted"
+                message: "Batch of 42 interactions queued for processing"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # HEALTH
+  # ============================================================================
+
+  /health:
+    get:
+      summary: Health check
+      description: API and database health status
+      operationId: getHealth
+      tags:
+        - Health
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - timestamp
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - healthy
+                      - degraded
+                      - unhealthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  database:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - connected
+                          - disconnected
+                      latency_ms:
+                        type: integer
+              example:
+                status: "healthy"
+                timestamp: "2025-10-02T15:30:00Z"
+                database:
+                  status: "connected"
+                  latency_ms: 3
+
+# ==============================================================================
+# COMPONENTS
+# ==============================================================================
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        LibreChat JWT token extracted from Authorization header.
+        Used to validate caller and extract user_id.
+
+  schemas:
+    # ====== COST ======
+    CostValue:
+      type: object
+      description: |
+        Cost representation with exact micro-cents and display format.
+
+        **Research Decision #4**: INTEGER micro-cents for exact arithmetic.
+      required:
+        - micro_cents
+        - display
+        - currency
+      properties:
+        micro_cents:
+          type: integer
+          description: Exact cost in micro-cents (1 micro-cent = $0.00001)
+          example: 12450
+        display:
+          type: string
+          description: Human-readable cost formatted as USD with 4 decimal places
+          pattern: '^\$\d+\.\d{4}$'
+          example: "$0.1245"
+        currency:
+          type: string
+          description: Currency code (ISO 4217)
+          enum:
+            - USD
+          example: "USD"
+
+    CostBreakdownInput:
+      type: object
+      description: Cost breakdown by factor type (input format - micro-cents only)
+      properties:
+        ai_tokens_cost_mc:
+          type: integer
+          description: AI token costs in micro-cents
+          default: 0
+          example: 9600
+        db_ops_cost_mc:
+          type: integer
+          description: Database operation costs in micro-cents
+          default: 0
+          example: 500
+        api_calls_cost_mc:
+          type: integer
+          description: External API call costs in micro-cents
+          default: 0
+          example: 0
+        compute_time_cost_mc:
+          type: integer
+          description: Compute time costs in micro-cents
+          default: 0
+          example: 2350
+
+    # ====== INTERACTION EVENT ======
+    InteractionEvent:
+      type: object
+      description: Interaction tracking event payload
+      required:
+        - session_id
+        - user_id
+        - timestamp
+        - type
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          description: Parent session ID (LibreChat conversationId)
+          example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+        user_id:
+          type: string
+          description: User identifier (LibreChat user.id from JWT)
+          example: "user-123"
+
+        timestamp:
+          type: string
+          format: date-time
+          description: Interaction timestamp (ISO 8601 UTC)
+          example: "2025-10-02T14:31:23Z"
+
+        type:
+          type: string
+          enum:
+            - chat
+            - db
+            - api
+            - cost-event
+          description: |
+            Interaction type:
+            - chat: User message to AI assistant
+            - db: Database operation via MCP server
+            - api: External API call via MCP tool
+            - cost-event: Manual cost adjustment or correction
+          example: "chat"
+
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+            - timeout
+          default: completed
+          description: Interaction status
+          example: "completed"
+
+        duration_ms:
+          type: integer
+          nullable: true
+          description: Duration in milliseconds (null for instant operations)
+          example: 2340
+
+        # AI-specific fields (required for type=chat)
+        model_name:
+          type: string
+          nullable: true
+          description: AI model name (required for chat interactions)
+          example: "gpt-4-turbo-2024-04-09"
+
+        prompt_tokens:
+          type: integer
+          nullable: true
+          description: Number of prompt tokens (chat only)
+          example: 450
+
+        completion_tokens:
+          type: integer
+          nullable: true
+          description: Number of completion tokens (chat only)
+          example: 320
+
+        # Cost breakdown (caller-calculated)
+        costs:
+          $ref: '#/components/schemas/CostBreakdownInput'
+
+        # Flexible metadata
+        metadata:
+          type: object
+          description: Additional interaction metadata (JSON)
+          additionalProperties: true
+          example:
+            request_id: "msg-abc123"
+            tool_name: "d1_query"
+            cache_hit: false
+            mcp_server: "d1-database-prod"
+            db_operation: "read"
+            db_rows_affected: 15
+
+      example:
+        session_id: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+        user_id: "user-123"
+        timestamp: "2025-10-02T14:31:23Z"
+        type: "chat"
+        status: "completed"
+        duration_ms: 2340
+        model_name: "gpt-4-turbo-2024-04-09"
+        prompt_tokens: 450
+        completion_tokens: 320
+        costs:
+          ai_tokens_cost_mc: 9600
+          db_ops_cost_mc: 0
+          api_calls_cost_mc: 0
+          compute_time_cost_mc: 0
+        metadata:
+          request_id: "msg-abc123"
+          cache_hit: false
+
+    # ====== ERRORS ======
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Missing required field: session_id"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            missing_field:
+              value:
+                error: "invalid_request"
+                message: "Missing required field: session_id"
+                details:
+                  field: "session_id"
+            invalid_type:
+              value:
+                error: "invalid_request"
+                message: "Invalid interaction type: invalid_type"
+                details:
+                  field: "type"
+                  value: "invalid_type"
+                  allowed_values:
+                    - chat
+                    - db
+                    - api
+                    - cost-event
+            chat_missing_model:
+              value:
+                error: "invalid_request"
+                message: "model_name required for chat interactions"
+                details:
+                  field: "model_name"
+                  type: "chat"
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "unauthorized"
+            message: "Missing or invalid JWT token"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "not_found"
+            message: "Session not found: a3bb189e-8bf9-3888-9912-ace4e6543002"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "internal_error"
+            message: "Database write failed"
+            details:
+              request_id: "req-xyz789"
+              retry_after_ms: 1000
