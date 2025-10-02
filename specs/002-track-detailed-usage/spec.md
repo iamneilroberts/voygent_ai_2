@@ -41,6 +41,7 @@
 - Q: How long should usage statistics be retained in the database? → A: Indefinitely with archival after 1 year
 - Q: What cost factors should be included in cost estimation? → A: All of the above + compute time
 - Q: How should cost rates be managed? → A: Auto-sync from provider APIs (OpenAI, Cloudflare pricing)
+- Q: What is the expected scale of usage? → A: 100 sessions/50 users per day
 
 ---
 
@@ -107,7 +108,7 @@ As a system administrator, I need to monitor how users are interacting with the 
 - **FR-024a**: System MUST automatically archive usage statistics older than 1 year to long-term storage
 - **FR-024b**: System MUST allow querying of both active and archived statistics
 - **FR-025**: System MUST support efficient querying of statistics [NEEDS CLARIFICATION: What are the performance targets - max query time, max dashboard load time?]
-- **FR-026**: System MUST handle [NEEDS CLARIFICATION: Expected scale - how many sessions/interactions per day/month/year?]
+- **FR-026**: System MUST handle expected scale of 100 sessions and 50 unique users per day (~3,000 sessions/month, ~36,500 sessions/year)
 
 ### Key Entities
 

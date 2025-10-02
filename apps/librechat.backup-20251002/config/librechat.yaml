@@ -111,30 +111,6 @@ endpoints:
             url: "https://template-document-mcp.somotravel.workers.dev/sse"
           description: "Document rendering"
 
-        web_fetch:
-          transport:
-            type: "sse"
-            url: "https://web-fetch-mcp.somotravel.workers.dev/sse"
-          description: "Web content fetching"
-
-        document_publish:
-          transport:
-            type: "sse"
-            url: "https://document-publish-mcp.somotravel.workers.dev/sse"
-          description: "GitHub Pages publishing"
-
-    # z.ai GLM Models - consolidated into single provider
-    - name: "Voygent Z.ai"
-      apiKey: "${Z_AI_API_KEY}"
-      baseURL: "https://api.z.ai/api/paas/v4"
-      models:
-        default: ["glm-4-6", "glm-4-5-air", "glm-4-5v"]
-        fetch: false
-      titleConvo: true
-      titleMethod: "completion"
-      titleModel: "glm-4-5-air"
-
-
 # Interface configuration
 interface:
   privacyPolicy:
