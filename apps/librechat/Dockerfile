@@ -12,6 +12,12 @@ WORKDIR /app
 # Copy LibreChat configuration
 COPY config/librechat.yaml /app/librechat.yaml
 
+# Copy analytics middleware and services
+COPY server/middleware/ /app/server/middleware/
+COPY server/services/ /app/server/services/
+COPY server/inject-analytics.js /app/server/inject-analytics.js
+COPY server/start-with-analytics.js /app/server/start-with-analytics.js
+
 # Create directories for uploads and logs
 RUN mkdir -p /app/client/public/images/uploads /app/logs
 
@@ -27,5 +33,5 @@ EXPOSE 3080
 # Switch to non-root user
 USER node
 
-# Start LibreChat
-CMD ["npm", "run", "backend"]
+# Start LibreChat with analytics wrapper
+CMD ["node", "/app/server/start-with-analytics.js"]
