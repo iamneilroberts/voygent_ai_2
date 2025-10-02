@@ -1,0 +1,374 @@
+openapi: 3.0.3
+info:
+  title: Voygent Status API
+  description: Combined API for token usage, trip progress, and MCP health status
+  version: 1.0.0
+  contact:
+    name: Voygent Development Team
+
+servers:
+  - url: https://voygent.render.com/api/voygent
+    description: Production server
+  - url: http://localhost:3000/api/voygent
+    description: Local development
+
+tags:
+  - name: status
+    description: Combined status endpoint for StatusBar component
+
+paths:
+  /status:
+    get:
+      summary: Get combined status (tokens + progress + MCP)
+      description: Returns all status information in a single request for efficient polling
+      operationId: getStatus
+      tags:
+        - status
+      parameters:
+        - name: conversationId
+          in: query
+          description: Conversation context for filtering
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: include
+          in: query
+          description: Comma-separated list of data to include (tokens, progress, mcp)
+          required: false
+          schema:
+            type: string
+            example: "tokens,progress"
+      responses:
+        '200':
+          description: Status data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              examples:
+                fullStatus:
+                  summary: All status data included
+                  value:
+                    ok: true
+                    tokens:
+                      model: "claude-3-5-sonnet-20241022"
+                      inputTokens: 5243
+                      outputTokens: 1872
+                      approximate: false
+                      price: 0.0437
+                    progress:
+                      tripName: "April 2026 Scotland & Ireland"
+                      phase: "Hotels"
+                      percent: 32
+                      cost: 4200.00
+                      budget: 8000.00
+                    mcp:
+                      healthy: true
+                      servers:
+                        - name: "d1_database"
+                          connected: true
+                          healthy: true
+                        - name: "prompt_instructions"
+                          connected: true
+                          healthy: true
+                        - name: "template_document"
+                          connected: true
+                          healthy: true
+                        - name: "web_fetch"
+                          connected: true
+                          healthy: true
+                        - name: "document_publish"
+                          connected: true
+                          healthy: true
+                tokensOnly:
+                  summary: Only token usage data
+                  value:
+                    ok: true
+                    tokens:
+                      model: "claude-3-5-sonnet-20241022"
+                      inputTokens: 5243
+                      outputTokens: 1872
+                      approximate: false
+                      price: 0.0437
+        '204':
+          description: No status data available
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /mcp-health:
+    get:
+      summary: Get MCP server health status
+      description: Returns health status for all configured MCP servers
+      operationId: getMCPHealth
+      tags:
+        - status
+      responses:
+        '200':
+          description: MCP health data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPHealthResponse'
+              example:
+                ok: true
+                healthy: true
+                servers:
+                  - name: "d1_database"
+                    url: "https://d1-database-prod.somotravel.workers.dev"
+                    connected: true
+                    healthy: true
+                    latency: 45
+                    lastCheck: 1738368000
+                  - name: "prompt_instructions"
+                    url: "https://prompt-instructions-d1-mcp.somotravel.workers.dev"
+                    connected: true
+                    healthy: true
+                    latency: 38
+                    lastCheck: 1738368000
+                  - name: "template_document"
+                    url: "https://template-document-mcp.somotravel.workers.dev"
+                    connected: true
+                    healthy: true
+                    latency: 52
+                    lastCheck: 1738368000
+                  - name: "web_fetch"
+                    url: "https://web-fetch-mcp.somotravel.workers.dev"
+                    connected: true
+                    healthy: true
+                    latency: 41
+                    lastCheck: 1738368000
+                  - name: "document_publish"
+                    url: "https://document-publish-mcp.somotravel.workers.dev"
+                    connected: true
+                    healthy: true
+                    latency: 49
+                    lastCheck: 1738368000
+        '500':
+          description: Health check failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    StatusResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          example: true
+        tokens:
+          $ref: '#/components/schemas/TokenUsageData'
+        progress:
+          $ref: '#/components/schemas/TripProgressData'
+        mcp:
+          $ref: '#/components/schemas/MCPHealthSummary'
+
+    TokenUsageData:
+      type: object
+      properties:
+        model:
+          type: string
+          example: "claude-3-5-sonnet-20241022"
+        inputTokens:
+          type: integer
+          minimum: 0
+          example: 5243
+        outputTokens:
+          type: integer
+          minimum: 0
+          example: 1872
+        totalTokens:
+          type: integer
+          minimum: 0
+          example: 7115
+        approximate:
+          type: boolean
+          default: false
+        price:
+          type: number
+          format: float
+          minimum: 0
+          example: 0.0437
+
+    TripProgressData:
+      type: object
+      properties:
+        tripId:
+          type: string
+          example: "trip_xyz789"
+        tripName:
+          type: string
+          example: "April 2026 Scotland & Ireland"
+        dates:
+          type: string
+          example: "Apr 15-28, 2026"
+        phase:
+          type: string
+          enum:
+            - Research
+            - Hotels
+            - Activities
+            - Booking
+            - Finalization
+          example: "Hotels"
+        step:
+          type: integer
+          minimum: 0
+          example: 3
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 32
+        cost:
+          type: number
+          format: float
+          minimum: 0
+          example: 4200.00
+        budget:
+          type: number
+          format: float
+          minimum: 0
+          example: 8000.00
+        commission:
+          type: number
+          format: float
+          minimum: 0
+          example: 420.00
+        url:
+          type: string
+          format: uri
+          example: "https://somotravel.us/trip_xyz789.html"
+
+    MCPHealthSummary:
+      type: object
+      required:
+        - healthy
+        - servers
+      properties:
+        healthy:
+          type: boolean
+          description: True if all required servers are healthy
+          example: true
+        servers:
+          type: array
+          items:
+            $ref: '#/components/schemas/MCPServerStatus'
+
+    MCPServerStatus:
+      type: object
+      required:
+        - name
+        - connected
+        - healthy
+      properties:
+        name:
+          type: string
+          description: MCP server identifier
+          example: "d1_database"
+        connected:
+          type: boolean
+          description: Whether server is connected
+          example: true
+        healthy:
+          type: boolean
+          description: Whether server is healthy
+          example: true
+        latency:
+          type: integer
+          description: Response latency in milliseconds
+          example: 45
+        error:
+          type: string
+          description: Error message if unhealthy
+          example: "Connection timeout"
+
+    MCPHealthResponse:
+      type: object
+      required:
+        - ok
+        - healthy
+        - servers
+      properties:
+        ok:
+          type: boolean
+          example: true
+        healthy:
+          type: boolean
+          description: True if all required servers are healthy
+          example: true
+        servers:
+          type: array
+          items:
+            $ref: '#/components/schemas/MCPServerHealth'
+
+    MCPServerHealth:
+      type: object
+      required:
+        - name
+        - url
+        - connected
+        - healthy
+        - lastCheck
+      properties:
+        name:
+          type: string
+          description: MCP server identifier
+          example: "d1_database"
+        url:
+          type: string
+          format: uri
+          description: Server SSE endpoint
+          example: "https://d1-database-prod.somotravel.workers.dev"
+        connected:
+          type: boolean
+          description: Whether server is connected
+          example: true
+        healthy:
+          type: boolean
+          description: Whether server is responding to health checks
+          example: true
+        latency:
+          type: integer
+          description: Health check response time (ms)
+          example: 45
+        lastCheck:
+          type: integer
+          description: Unix timestamp of last health check
+          example: 1738368000
+        error:
+          type: string
+          description: Error message if unhealthy
+          example: "Connection timeout"
+
+    ErrorResponse:
+      type: object
+      required:
+        - ok
+        - error
+        - code
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Human-readable error message
+          example: "Failed to fetch status"
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "STATUS_FETCH_ERROR"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true

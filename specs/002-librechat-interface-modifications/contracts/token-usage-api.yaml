@@ -1,0 +1,369 @@
+openapi: 3.0.3
+info:
+  title: Voygent Token Usage API
+  description: API for tracking and retrieving token usage metrics in LibreChat
+  version: 1.0.0
+  contact:
+    name: Voygent Development Team
+
+servers:
+  - url: https://voygent.render.com/api/voygent
+    description: Production server
+  - url: http://localhost:3000/api/voygent
+    description: Local development
+
+tags:
+  - name: token-usage
+    description: Token usage tracking and retrieval
+
+paths:
+  /token-usage:
+    get:
+      summary: Get token usage for a conversation or session
+      description: Retrieves token usage metrics including input/output tokens and cost
+      operationId: getTokenUsage
+      tags:
+        - token-usage
+      parameters:
+        - name: conversationId
+          in: query
+          description: Optional conversation ID to filter usage
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: cumulative
+          in: query
+          description: Return cumulative session usage instead of last interaction
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Token usage data retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsageResponse'
+              examples:
+                lastUsage:
+                  summary: Last interaction token usage
+                  value:
+                    ok: true
+                    usage:
+                      model: "claude-3-5-sonnet-20241022"
+                      inputTokens: 5243
+                      outputTokens: 1872
+                      totalTokens: 7115
+                      approximate: false
+                      price: 0.0437
+                      conversationId: "conv_abc123"
+                      timestamp: 1738368000
+                cumulativeUsage:
+                  summary: Cumulative session usage
+                  value:
+                    ok: true
+                    usage:
+                      model: "claude-3-5-sonnet-20241022"
+                      inputTokens: 42389
+                      outputTokens: 15672
+                      totalTokens: 58061
+                      approximate: true
+                      price: 0.3624
+                      timestamp: 1738368000
+        '204':
+          description: No usage data available
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /token-usage/log:
+    post:
+      summary: Log token usage for an AI interaction
+      description: Records token usage after each AI response
+      operationId: logTokenUsage
+      tags:
+        - token-usage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenUsageLogRequest'
+            example:
+              conversationId: "conv_abc123"
+              userId: "user_xyz789"
+              model: "claude-3-5-sonnet-20241022"
+              inputTokens: 5243
+              outputTokens: 1872
+              approximate: false
+      responses:
+        '201':
+          description: Token usage logged successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: string
+                    format: uuid
+                    example: "log_def456"
+                  price:
+                    type: number
+                    format: float
+                    example: 0.0437
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Failed to log token usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /token-usage/history:
+    get:
+      summary: Get token usage history for a user
+      description: Retrieves paginated token usage history
+      operationId: getTokenUsageHistory
+      tags:
+        - token-usage
+      parameters:
+        - name: userId
+          in: query
+          description: User ID to filter history
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Number of records to return
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Pagination offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: startDate
+          in: query
+          description: Filter by start date (ISO 8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          description: Filter by end date (ISO 8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Token usage history retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsageHistoryResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    TokenUsageResponse:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+          description: Whether the request succeeded
+        usage:
+          $ref: '#/components/schemas/TokenUsage'
+
+    TokenUsage:
+      type: object
+      required:
+        - model
+        - inputTokens
+        - outputTokens
+        - totalTokens
+        - price
+        - timestamp
+      properties:
+        model:
+          type: string
+          description: Model identifier
+          example: "claude-3-5-sonnet-20241022"
+        inputTokens:
+          type: integer
+          minimum: 0
+          description: Number of input tokens
+          example: 5243
+        outputTokens:
+          type: integer
+          minimum: 0
+          description: Number of output tokens
+          example: 1872
+        totalTokens:
+          type: integer
+          minimum: 0
+          description: Total tokens (input + output)
+          example: 7115
+        approximate:
+          type: boolean
+          description: Whether token counts are approximate
+          default: false
+        price:
+          type: number
+          format: float
+          minimum: 0
+          description: Cost in USD
+          example: 0.0437
+        conversationId:
+          type: string
+          format: uuid
+          description: Associated conversation ID
+          example: "conv_abc123"
+        timestamp:
+          type: integer
+          description: Unix timestamp of usage
+          example: 1738368000
+
+    TokenUsageLogRequest:
+      type: object
+      required:
+        - conversationId
+        - userId
+        - model
+        - inputTokens
+        - outputTokens
+      properties:
+        conversationId:
+          type: string
+          format: uuid
+          description: Conversation ID
+        userId:
+          type: string
+          description: User ID
+        model:
+          type: string
+          description: Model identifier
+        inputTokens:
+          type: integer
+          minimum: 0
+          description: Number of input tokens
+        outputTokens:
+          type: integer
+          minimum: 0
+          description: Number of output tokens
+        approximate:
+          type: boolean
+          description: Whether token counts are approximate
+          default: false
+
+    TokenUsageHistoryResponse:
+      type: object
+      required:
+        - ok
+        - data
+        - pagination
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenUsageHistoryEntry'
+        pagination:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 150
+            limit:
+              type: integer
+              example: 20
+            offset:
+              type: integer
+              example: 0
+            hasMore:
+              type: boolean
+              example: true
+
+    TokenUsageHistoryEntry:
+      allOf:
+        - $ref: '#/components/schemas/TokenUsage'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+              example: "log_def456"
+            userId:
+              type: string
+              example: "user_xyz789"
+            createdAt:
+              type: integer
+              description: Unix timestamp of record creation
+              example: 1738368000
+
+    ErrorResponse:
+      type: object
+      required:
+        - ok
+        - error
+        - code
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Human-readable error message
+          example: "Failed to fetch token usage"
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "USAGE_FETCH_ERROR"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true

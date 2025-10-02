@@ -1,0 +1,276 @@
+openapi: 3.0.3
+info:
+  title: Voygent Trip Progress API
+  description: API for tracking and displaying trip planning progress
+  version: 1.0.0
+  contact:
+    name: Voygent Development Team
+
+servers:
+  - url: https://voygent.render.com/api/voygent
+    description: Production server
+  - url: http://localhost:3000/api/voygent
+    description: Local development
+
+tags:
+  - name: trip-progress
+    description: Trip planning progress tracking
+
+paths:
+  /trip-progress:
+    get:
+      summary: Get trip planning progress
+      description: Retrieves current progress for an active trip planning session
+      operationId: getTripProgress
+      tags:
+        - trip-progress
+      parameters:
+        - name: tripId
+          in: query
+          description: Specific trip ID to fetch progress for
+          required: false
+          schema:
+            type: string
+        - name: conversationId
+          in: query
+          description: Auto-detect trip from conversation context
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Trip progress retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripProgressResponse'
+              example:
+                ok: true
+                progress:
+                  tripId: "trip_xyz789"
+                  tripName: "April 2026 Scotland & Ireland"
+                  dates: "Apr 15-28, 2026"
+                  phase: "Hotels"
+                  step: 3
+                  totalSteps: 5
+                  percent: 32
+                  cost: 4200.00
+                  budget: 8000.00
+                  commission: 420.00
+                  url: "https://somotravel.us/trip_xyz789.html"
+                  lastUpdated: 1738368000
+        '204':
+          description: No active trip in progress
+        '404':
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /trip-progress/update:
+    post:
+      summary: Update trip progress
+      description: Updates the progress state for a trip (called by MCP servers)
+      operationId: updateTripProgress
+      tags:
+        - trip-progress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripProgressUpdateRequest'
+            example:
+              tripId: "trip_xyz789"
+              phase: "Hotels"
+              step: 3
+              totalSteps: 5
+              cost: 4200.00
+      responses:
+        '200':
+          description: Progress updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  percent:
+                    type: integer
+                    description: Calculated completion percentage
+                    example: 32
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Failed to update progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    TripProgressResponse:
+      type: object
+      required:
+        - ok
+        - progress
+      properties:
+        ok:
+          type: boolean
+          example: true
+        progress:
+          $ref: '#/components/schemas/TripProgress'
+
+    TripProgress:
+      type: object
+      required:
+        - tripId
+        - tripName
+        - phase
+        - percent
+      properties:
+        tripId:
+          type: string
+          description: Unique trip identifier
+          example: "trip_xyz789"
+        tripName:
+          type: string
+          description: Human-readable trip name
+          example: "April 2026 Scotland & Ireland"
+        dates:
+          type: string
+          description: Trip date range
+          example: "Apr 15-28, 2026"
+        phase:
+          type: string
+          enum:
+            - Research
+            - Hotels
+            - Activities
+            - Booking
+            - Finalization
+          description: Current workflow phase
+          example: "Hotels"
+        step:
+          type: integer
+          minimum: 0
+          description: Current step within phase
+          example: 3
+        totalSteps:
+          type: integer
+          minimum: 1
+          description: Total steps in current phase
+          example: 5
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Overall completion percentage
+          example: 32
+        cost:
+          type: number
+          format: float
+          minimum: 0
+          description: Current trip cost (USD)
+          example: 4200.00
+        budget:
+          type: number
+          format: float
+          minimum: 0
+          description: Trip budget (USD)
+          example: 8000.00
+        commission:
+          type: number
+          format: float
+          minimum: 0
+          description: Estimated commission (USD)
+          example: 420.00
+        url:
+          type: string
+          format: uri
+          description: Link to published trip page
+          example: "https://somotravel.us/trip_xyz789.html"
+        lastUpdated:
+          type: integer
+          description: Unix timestamp of last update
+          example: 1738368000
+
+    TripProgressUpdateRequest:
+      type: object
+      required:
+        - tripId
+      properties:
+        tripId:
+          type: string
+          description: Trip identifier
+        phase:
+          type: string
+          enum:
+            - Research
+            - Hotels
+            - Activities
+            - Booking
+            - Finalization
+          description: Current workflow phase
+        step:
+          type: integer
+          minimum: 0
+          description: Current step within phase
+        totalSteps:
+          type: integer
+          minimum: 1
+          description: Total steps in phase
+        cost:
+          type: number
+          format: float
+          minimum: 0
+          description: Updated trip cost
+        commission:
+          type: number
+          format: float
+          minimum: 0
+          description: Updated commission estimate
+
+    ErrorResponse:
+      type: object
+      required:
+        - ok
+        - error
+        - code
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Human-readable error message
+          example: "Trip not found"
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "TRIP_NOT_FOUND"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true

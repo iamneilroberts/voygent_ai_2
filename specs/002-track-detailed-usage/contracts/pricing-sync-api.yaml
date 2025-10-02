@@ -1,0 +1,968 @@
+openapi: 3.0.3
+info:
+  title: Voygent Pricing Sync API
+  description: |
+    API for synchronizing AI provider pricing rates and querying cached pricing data.
+
+    This API is used by:
+    - Scheduled cron jobs to sync pricing from OpenAI, Anthropic, Cloudflare APIs
+    - Cost calculation workers to retrieve current pricing rates
+    - Manual pricing updates for custom models or rate adjustments
+
+    **Research Context**:
+    - Pricing stored in `pricing_cache` table (Decision #4)
+    - Rates stored as INTEGER micro-cents per unit (1 micro-cent = $0.00001)
+    - Soft-delete model: old rates marked inactive, not deleted (for cost recalculation audits)
+  version: 1.0.0
+  contact:
+    name: Voygent API Support
+    url: https://github.com/voygent/voygent-v2
+  license:
+    name: MIT
+
+servers:
+  - url: https://pricing.voygent.workers.dev/v1
+    description: Production (Cloudflare Workers)
+  - url: http://localhost:8789/v1
+    description: Local development (wrangler dev)
+
+tags:
+  - name: Sync
+    description: Pricing synchronization operations
+  - name: Rates
+    description: Query pricing rates
+  - name: Health
+    description: API health and status
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ============================================================================
+  # SYNC OPERATIONS
+  # ============================================================================
+
+  /pricing/sync:
+    post:
+      summary: Sync pricing from all providers
+      description: |
+        Trigger synchronization of pricing rates from all supported providers.
+
+        **Callers**: Scheduled cron job (daily at 06:00 UTC).
+
+        **Behavior**:
+        - Fetches latest rates from OpenAI, Anthropic, Cloudflare APIs
+        - Inserts new rates into `pricing_cache` with `is_active=1`
+        - Marks superseded rates as `is_active=0` (soft delete)
+        - Returns summary of updated rates
+
+        **Idempotency**: Safe to call multiple times; only inserts if rates changed.
+
+        **Performance**: 5-10s (depends on provider API latencies).
+      operationId: syncAllPricing
+      tags:
+        - Sync
+      requestBody:
+        description: Optional sync configuration
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providers:
+                  type: array
+                  description: Limit sync to specific providers (default = all)
+                  items:
+                    type: string
+                    enum:
+                      - openai
+                      - anthropic
+                      - cloudflare
+                  example:
+                    - openai
+                    - anthropic
+                force:
+                  type: boolean
+                  default: false
+                  description: If true, insert rates even if unchanged (for testing)
+
+      responses:
+        '200':
+          description: Sync completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - synced_at
+                  - providers
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - completed
+                      - partial
+                  synced_at:
+                    type: string
+                    format: date-time
+                    description: Sync completion timestamp
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderSyncResult'
+              example:
+                status: "completed"
+                synced_at: "2025-10-02T06:00:00Z"
+                providers:
+                  - provider: "openai"
+                    status: "success"
+                    rates_added: 8
+                    rates_updated: 2
+                    models_synced:
+                      - "gpt-4-turbo-2024-04-09"
+                      - "gpt-4o-2024-08-06"
+                  - provider: "anthropic"
+                    status: "success"
+                    rates_added: 6
+                    rates_updated: 0
+                    models_synced:
+                      - "claude-3-5-sonnet-20241022"
+                      - "claude-3-opus-20240229"
+
+        '207':
+          description: Multi-status (some providers failed)
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - synced_at
+                  - providers
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - partial
+                  synced_at:
+                    type: string
+                    format: date-time
+                  providers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProviderSyncResult'
+              example:
+                status: "partial"
+                synced_at: "2025-10-02T06:00:00Z"
+                providers:
+                  - provider: "openai"
+                    status: "success"
+                    rates_added: 8
+                  - provider: "anthropic"
+                    status: "error"
+                    error_message: "Anthropic API timeout after 10s"
+                    rates_added: 0
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pricing/sync/{provider}:
+    post:
+      summary: Sync pricing from specific provider
+      description: |
+        Trigger synchronization for a single provider.
+
+        **Use Case**: Re-sync after provider API failure, or manual refresh.
+      operationId: syncProviderPricing
+      tags:
+        - Sync
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: Provider identifier
+          schema:
+            type: string
+            enum:
+              - openai
+              - anthropic
+              - cloudflare
+          example: "openai"
+
+      requestBody:
+        description: Optional sync configuration
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Force sync even if rates unchanged
+
+      responses:
+        '200':
+          description: Sync completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderSyncResult'
+              example:
+                provider: "openai"
+                status: "success"
+                rates_added: 8
+                rates_updated: 2
+                models_synced:
+                  - "gpt-4-turbo-2024-04-09"
+                  - "gpt-4o-2024-08-06"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # RATE QUERIES
+  # ============================================================================
+
+  /pricing/rates:
+    get:
+      summary: List all active pricing rates
+      description: |
+        Retrieve all active pricing rates from cache.
+
+        **Performance**: Single query with `is_active=1` filter (5-10ms).
+
+        **Use Case**: Cost calculator initialization, rate display in dashboard.
+      operationId: listRates
+      tags:
+        - Rates
+      parameters:
+        - name: provider
+          in: query
+          description: Filter by provider
+          schema:
+            type: string
+            enum:
+              - openai
+              - anthropic
+              - cloudflare
+              - custom
+          example: "openai"
+
+        - name: model_name
+          in: query
+          description: Filter by model name (exact match)
+          schema:
+            type: string
+          example: "gpt-4-turbo-2024-04-09"
+
+        - name: unit_type
+          in: query
+          description: Filter by unit type
+          schema:
+            type: string
+            enum:
+              - token
+              - row
+              - request
+              - gb-second
+          example: "token"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - rates
+                properties:
+                  rates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PricingRate'
+              example:
+                rates:
+                  - id: "rate-001"
+                    provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    cost_per_unit_mc: 10
+                    currency: "USD"
+                    effective_date: "2024-04-09T00:00:00Z"
+                    is_active: true
+                    metadata:
+                      token_type: "prompt"
+                  - id: "rate-002"
+                    provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    cost_per_unit_mc: 30
+                    currency: "USD"
+                    effective_date: "2024-04-09T00:00:00Z"
+                    is_active: true
+                    metadata:
+                      token_type: "completion"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pricing/rates/{provider}/{model_name}:
+    get:
+      summary: Get pricing rates for specific model
+      description: |
+        Retrieve all active rates for a specific provider + model combination.
+
+        **Returns**: Separate rates for prompt/completion tokens (or other unit types).
+
+        **Performance**: Indexed lookup on (provider, model_name, is_active) (2-5ms).
+      operationId: getModelRates
+      tags:
+        - Rates
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: Provider identifier
+          schema:
+            type: string
+          example: "openai"
+
+        - name: model_name
+          in: path
+          required: true
+          description: Model name
+          schema:
+            type: string
+          example: "gpt-4-turbo-2024-04-09"
+
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - provider
+                  - model_name
+                  - rates
+                properties:
+                  provider:
+                    type: string
+                  model_name:
+                    type: string
+                  rates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PricingRate'
+              example:
+                provider: "openai"
+                model_name: "gpt-4-turbo-2024-04-09"
+                rates:
+                  - id: "rate-001"
+                    unit_type: "token"
+                    cost_per_unit_mc: 10
+                    currency: "USD"
+                    effective_date: "2024-04-09T00:00:00Z"
+                    metadata:
+                      token_type: "prompt"
+                  - id: "rate-002"
+                    unit_type: "token"
+                    cost_per_unit_mc: 30
+                    currency: "USD"
+                    effective_date: "2024-04-09T00:00:00Z"
+                    metadata:
+                      token_type: "completion"
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pricing/rates/calculate:
+    post:
+      summary: Calculate cost for given usage
+      description: |
+        Calculate cost estimate using cached pricing rates.
+
+        **Use Case**: Pre-flight cost estimation, cost verification in tracking API.
+
+        **Performance**: In-memory rate lookup + multiplication (1-2ms).
+      operationId: calculateCost
+      tags:
+        - Rates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - usage
+              properties:
+                usage:
+                  type: array
+                  description: Usage records to price
+                  items:
+                    $ref: '#/components/schemas/UsageRecord'
+              example:
+                usage:
+                  - provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    units: 450
+                    metadata:
+                      token_type: "prompt"
+                  - provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    units: 320
+                    metadata:
+                      token_type: "completion"
+
+      responses:
+        '200':
+          description: Cost calculation successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - total_cost
+                  - breakdown
+                properties:
+                  total_cost:
+                    $ref: '#/components/schemas/CostValue'
+                  breakdown:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CostLineItem'
+              example:
+                total_cost:
+                  micro_cents: 9600
+                  display: "$0.0960"
+                  currency: "USD"
+                breakdown:
+                  - provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    units: 450
+                    cost_per_unit_mc: 10
+                    line_cost:
+                      micro_cents: 4500
+                      display: "$0.0450"
+                      currency: "USD"
+                    metadata:
+                      token_type: "prompt"
+                  - provider: "openai"
+                    model_name: "gpt-4-turbo-2024-04-09"
+                    unit_type: "token"
+                    units: 320
+                    cost_per_unit_mc: 30
+                    line_cost:
+                      micro_cents: 9600
+                      display: "$0.0960"
+                      currency: "USD"
+                    metadata:
+                      token_type: "completion"
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '404':
+          description: Pricing rate not found for given usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "rate_not_found"
+                message: "No active rate found for openai/gpt-4-turbo-2024-04-09/token"
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # MANUAL RATE MANAGEMENT
+  # ============================================================================
+
+  /pricing/rates/custom:
+    post:
+      summary: Add custom pricing rate
+      description: |
+        Manually add a custom pricing rate (for internal models, custom tiers, etc.).
+
+        **Use Case**: Private models, volume discounts, custom rate cards.
+
+        **Authorization**: Requires admin role.
+      operationId: addCustomRate
+      tags:
+        - Rates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomRateInput'
+
+      responses:
+        '201':
+          description: Custom rate created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingRate'
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+        '403':
+          description: Forbidden (requires admin role)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "forbidden"
+                message: "Admin role required to add custom rates"
+
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================================
+  # HEALTH
+  # ============================================================================
+
+  /health:
+    get:
+      summary: Health check
+      description: API and database health status
+      operationId: getHealth
+      tags:
+        - Health
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - timestamp
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - healthy
+                      - degraded
+                      - unhealthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  database:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - connected
+                          - disconnected
+                      latency_ms:
+                        type: integer
+                  pricing_cache:
+                    type: object
+                    description: Pricing cache health metrics
+                    properties:
+                      total_rates:
+                        type: integer
+                        description: Number of active rates cached
+                      last_sync:
+                        type: string
+                        format: date-time
+                        description: Last successful sync timestamp
+                      stale_providers:
+                        type: array
+                        description: Providers with rates older than 7 days
+                        items:
+                          type: string
+              example:
+                status: "healthy"
+                timestamp: "2025-10-02T15:30:00Z"
+                database:
+                  status: "connected"
+                  latency_ms: 3
+                pricing_cache:
+                  total_rates: 42
+                  last_sync: "2025-10-02T06:00:00Z"
+                  stale_providers: []
+
+# ==============================================================================
+# COMPONENTS
+# ==============================================================================
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        LibreChat JWT token or API key for pricing sync operations.
+
+  schemas:
+    # ====== COST ======
+    CostValue:
+      type: object
+      description: Cost representation with exact micro-cents and display format
+      required:
+        - micro_cents
+        - display
+        - currency
+      properties:
+        micro_cents:
+          type: integer
+          description: Exact cost in micro-cents (1 micro-cent = $0.00001)
+          example: 9600
+        display:
+          type: string
+          description: Human-readable cost formatted as USD with 4 decimal places
+          pattern: '^\$\d+\.\d{4}$'
+          example: "$0.0960"
+        currency:
+          type: string
+          description: Currency code (ISO 4217)
+          enum:
+            - USD
+          example: "USD"
+
+    # ====== PRICING RATE ======
+    PricingRate:
+      type: object
+      description: Cached pricing rate
+      required:
+        - id
+        - provider
+        - unit_type
+        - cost_per_unit_mc
+        - currency
+        - effective_date
+        - is_active
+      properties:
+        id:
+          type: string
+          description: Rate ID (UUID)
+          example: "rate-001"
+        provider:
+          type: string
+          description: Provider identifier
+          enum:
+            - openai
+            - anthropic
+            - cloudflare
+            - custom
+          example: "openai"
+        model_name:
+          type: string
+          nullable: true
+          description: Model name (null for provider-level rates like D1 row pricing)
+          example: "gpt-4-turbo-2024-04-09"
+        unit_type:
+          type: string
+          description: Pricing unit type
+          enum:
+            - token
+            - row
+            - request
+            - gb-second
+          example: "token"
+        cost_per_unit_mc:
+          type: integer
+          description: Cost per unit in micro-cents
+          example: 10
+        currency:
+          type: string
+          description: Currency code
+          enum:
+            - USD
+          example: "USD"
+        effective_date:
+          type: string
+          format: date-time
+          description: When this rate became active (ISO 8601 UTC)
+          example: "2024-04-09T00:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When this rate expires (null = no expiration)
+        is_active:
+          type: boolean
+          description: Whether this rate is currently active
+          example: true
+        source_url:
+          type: string
+          nullable: true
+          description: Source URL for this rate (pricing docs or API endpoint)
+          example: "https://openai.com/api/pricing"
+        metadata:
+          type: object
+          description: Additional rate metadata (JSON)
+          additionalProperties: true
+          example:
+            token_type: "prompt"
+            tier: "standard"
+
+    # ====== SYNC RESULT ======
+    ProviderSyncResult:
+      type: object
+      description: Pricing sync result for a single provider
+      required:
+        - provider
+        - status
+      properties:
+        provider:
+          type: string
+          description: Provider identifier
+          example: "openai"
+        status:
+          type: string
+          enum:
+            - success
+            - error
+          description: Sync status
+          example: "success"
+        rates_added:
+          type: integer
+          description: Number of new rates inserted
+          example: 8
+        rates_updated:
+          type: integer
+          description: Number of existing rates updated (marked inactive)
+          example: 2
+        models_synced:
+          type: array
+          description: List of model names synced
+          items:
+            type: string
+          example:
+            - "gpt-4-turbo-2024-04-09"
+            - "gpt-4o-2024-08-06"
+        error_message:
+          type: string
+          nullable: true
+          description: Error message if sync failed
+          example: "Anthropic API timeout after 10s"
+
+    # ====== USAGE & COST CALCULATION ======
+    UsageRecord:
+      type: object
+      description: Usage record for cost calculation
+      required:
+        - provider
+        - unit_type
+        - units
+      properties:
+        provider:
+          type: string
+          description: Provider identifier
+          example: "openai"
+        model_name:
+          type: string
+          nullable: true
+          description: Model name (null for provider-level rates)
+          example: "gpt-4-turbo-2024-04-09"
+        unit_type:
+          type: string
+          description: Unit type
+          enum:
+            - token
+            - row
+            - request
+            - gb-second
+          example: "token"
+        units:
+          type: integer
+          description: Number of units consumed
+          example: 450
+        metadata:
+          type: object
+          description: Additional metadata for rate matching
+          additionalProperties: true
+          example:
+            token_type: "prompt"
+
+    CostLineItem:
+      type: object
+      description: Cost calculation line item (single usage record × rate)
+      required:
+        - provider
+        - unit_type
+        - units
+        - cost_per_unit_mc
+        - line_cost
+      properties:
+        provider:
+          type: string
+        model_name:
+          type: string
+          nullable: true
+        unit_type:
+          type: string
+        units:
+          type: integer
+        cost_per_unit_mc:
+          type: integer
+          description: Rate used for calculation (micro-cents per unit)
+        line_cost:
+          $ref: '#/components/schemas/CostValue'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    # ====== CUSTOM RATE INPUT ======
+    CustomRateInput:
+      type: object
+      description: Input for creating custom pricing rate
+      required:
+        - provider
+        - unit_type
+        - cost_per_unit_mc
+        - effective_date
+      properties:
+        provider:
+          type: string
+          description: Provider identifier (use 'custom' for internal models)
+          example: "custom"
+        model_name:
+          type: string
+          nullable: true
+          description: Model name
+          example: "internal-model-v1"
+        unit_type:
+          type: string
+          enum:
+            - token
+            - row
+            - request
+            - gb-second
+          example: "token"
+        cost_per_unit_mc:
+          type: integer
+          description: Cost per unit in micro-cents
+          example: 5
+        currency:
+          type: string
+          default: USD
+          enum:
+            - USD
+        effective_date:
+          type: string
+          format: date-time
+          description: When this rate becomes active (ISO 8601 UTC)
+          example: "2025-10-02T00:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional expiration timestamp
+        source_url:
+          type: string
+          nullable: true
+          description: Optional source URL
+        metadata:
+          type: object
+          description: Optional metadata
+          additionalProperties: true
+
+    # ====== ERRORS ======
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Missing required field: provider"
+        details:
+          type: object
+          description: Additional error context
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "invalid_request"
+            message: "Missing required field: provider"
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "unauthorized"
+            message: "Missing or invalid JWT token"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "not_found"
+            message: "No active rate found for openai/gpt-4-turbo-2024-04-09/token"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "internal_error"
+            message: "Database query failed"
+            details:
+              request_id: "req-xyz789"
