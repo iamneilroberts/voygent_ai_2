@@ -45,6 +45,8 @@ WORKERS=(
     "d1-database-prod"
     "prompt-instructions-d1-mcp"
     "template-document-mcp"
+    "document-publish-mcp"
+    "web-fetch-mcp"
 )
 
 # Deploy each worker
