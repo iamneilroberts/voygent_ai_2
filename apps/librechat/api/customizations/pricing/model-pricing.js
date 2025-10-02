@@ -6,19 +6,21 @@
  * Pricing data sourced from research.md section 6 (2025-01 rates).
  */
 
-export interface ModelPricing {
-  modelId: string;
-  modelName: string;
-  inputPricePer1M: number;  // USD per 1 million input tokens
-  outputPricePer1M: number; // USD per 1 million output tokens
-}
+/**
+ * @typedef {Object} ModelPricing
+ * @property {string} modelId - Model identifier
+ * @property {string} modelName - Human-readable model name
+ * @property {number} inputPricePer1M - USD per 1 million input tokens
+ * @property {number} outputPricePer1M - USD per 1 million output tokens
+ */
 
 /**
  * Model pricing lookup table
  * Prices are per 1 million tokens in USD
  * Last updated: 2025-01
+ * @type {Record<string, ModelPricing>}
  */
-export const MODEL_PRICING: Record<string, ModelPricing> = {
+export const MODEL_PRICING = {
   'claude-3-5-sonnet-20241022': {
     modelId: 'claude-3-5-sonnet-20241022',
     modelName: 'Claude 3.5 Sonnet',
@@ -48,21 +50,17 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 /**
  * Calculate cost for token usage
  *
- * @param inputTokens - Number of input tokens consumed
- * @param outputTokens - Number of output tokens generated
- * @param modelId - Model identifier (e.g., 'claude-3-5-sonnet-20241022')
- * @returns Cost in USD, rounded to 6 decimal places
+ * @param {number} inputTokens - Number of input tokens consumed
+ * @param {number} outputTokens - Number of output tokens generated
+ * @param {string} modelId - Model identifier (e.g., 'claude-3-5-sonnet-20241022')
+ * @returns {number} Cost in USD, rounded to 6 decimal places
  *
  * @example
  * calculateCost(5000, 1500, 'claude-3-5-sonnet-20241022')
  * // Returns: 0.0375
  * // Calculation: (5000/1M * $3) + (1500/1M * $15) = $0.015 + $0.0225 = $0.0375
  */
-export function calculateCost(
-  inputTokens: number,
-  outputTokens: number,
-  modelId: string
-): number {
+export function calculateCost(inputTokens, outputTokens, modelId) {
   const pricing = MODEL_PRICING[modelId];
 
   if (!pricing) {
@@ -79,19 +77,19 @@ export function calculateCost(
 /**
  * Get human-readable model name from model ID
  *
- * @param modelId - Model identifier
- * @returns Human-readable model name or original ID if not found
+ * @param {string} modelId - Model identifier
+ * @returns {string} Human-readable model name or original ID if not found
  */
-export function getModelName(modelId: string): string {
+export function getModelName(modelId) {
   return MODEL_PRICING[modelId]?.modelName || modelId;
 }
 
 /**
  * Check if pricing exists for a given model
  *
- * @param modelId - Model identifier
- * @returns true if pricing data exists
+ * @param {string} modelId - Model identifier
+ * @returns {boolean} true if pricing data exists
  */
-export function hasPricing(modelId: string): boolean {
+export function hasPricing(modelId) {
   return modelId in MODEL_PRICING;
 }
