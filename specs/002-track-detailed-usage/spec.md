@@ -40,6 +40,7 @@
 - Q: What interaction types should the system track? → A: Configurable: chats, db, api, cost
 - Q: How long should usage statistics be retained in the database? → A: Indefinitely with archival after 1 year
 - Q: What cost factors should be included in cost estimation? → A: All of the above + compute time
+- Q: How should cost rates be managed? → A: Auto-sync from provider APIs (OpenAI, Cloudflare pricing)
 
 ---
 
@@ -81,7 +82,9 @@ As a system administrator, I need to monitor how users are interacting with the 
 #### Cost Estimation
 - **FR-008**: System MUST estimate costs based on AI model token usage (prompt + completion), database operations (read/write), external API calls, and compute time
 - **FR-008a**: System MUST separately track and attribute costs for each cost factor type
-- **FR-009**: System MUST support configurable cost rates [NEEDS CLARIFICATION: How are cost rates defined and updated - manual configuration, API integration, or hardcoded?]
+- **FR-009**: System MUST automatically synchronize cost rates from provider APIs (OpenAI pricing API, Cloudflare pricing endpoints)
+- **FR-009a**: System MUST periodically refresh cost rates to ensure accuracy
+- **FR-009b**: System MUST handle provider API failures by using cached rates and logging warnings
 - **FR-010**: System MUST aggregate costs at the session level
 - **FR-011**: System MUST aggregate costs at the user level
 - **FR-012**: System MUST aggregate costs at the system level (all users, all time)
