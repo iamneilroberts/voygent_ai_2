@@ -36,7 +36,7 @@ async function handleRequest(json: any, env: Env) {
             {
               name: 'generate_itinerary',
               description: 'Generate a comprehensive travel itinerary document with flights, accommodation, activities, and checklists',
-              input_schema: {
+              inputSchema: {
                 type: 'object',
                 properties: {
                   title: {
@@ -76,7 +76,7 @@ async function handleRequest(json: any, env: Env) {
             {
               name: 'generate_packing_list',
               description: 'Generate a personalized packing list based on destination, trip type, season, and traveler requirements',
-              input_schema: {
+              inputSchema: {
                 type: 'object',
                 properties: {
                   destination: {
@@ -114,7 +114,7 @@ async function handleRequest(json: any, env: Env) {
             {
               name: 'generate_travel_budget',
               description: 'Generate a comprehensive travel budget with expense categories, recommendations, and money-saving tips',
-              input_schema: {
+              inputSchema: {
                 type: 'object',
                 properties: {
                   destination: {
@@ -150,7 +150,7 @@ async function handleRequest(json: any, env: Env) {
             {
               name: 'generate_travel_checklist',
               description: 'Generate a comprehensive, time-based travel checklist with all preparations needed before and during travel',
-              input_schema: {
+              inputSchema: {
                 type: 'object',
                 properties: {
                   destination: {
@@ -541,6 +541,31 @@ export default {
       }), {
         headers: { "Content-Type": "application/json" }
       });
+    }
+
+    // SSE endpoint - POST for MCP messages (LibreChat compatibility)
+    if (url.pathname === '/sse' && request.method === 'POST') {
+      try {
+        const json = await request.json();
+        const response = await handleRequest(json, env);
+        return new Response(JSON.stringify(response), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32700,
+            message: 'Parse error'
+          }
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // SSE endpoint - GET for initial connection
